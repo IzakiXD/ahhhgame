@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Space Invaders</title>
+  <style>
+    body {
+      display: grid;
+      min-height: 100vh;
+      margin: 0;
+      place-items: center;
+      background: #000;
+    }
+
+    canvas {
+      display: block;
+      width: min(800px, 100vw);
+      height: auto;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" width="800" height="600" aria-label="Space Invaders game canvas"></canvas>
+  <script>
+    const canvas = document.getElementById("game");
+    const context = canvas.getContext("2d");
+    const ship = {
+      x: (canvas.width - 40) / 2,
+      y: canvas.height - 50,
+      width: 40,
+      height: 20,
+      speed: 300
+    };
+    const invaderSprites = {
+      squid: {
+        color: "#ff5c5c",
+        pixels: [
+          "00111100",
+          "01111110",
+          "11111111",
+          "11011011",
+          "11111111",
+          "00100100",
+          "01011010",
+          "10100101"
+        ]
+      },
+      crab: {
+        color: "#ffd84d",
+        pixels: [
+          "00011000",
+          "00111100",
+          "01111110",
+          "11011011",
+          "11111111",
+          "10100101",
+          "00100100",
+          "01000010"
+        ]
+      },
+      octopus: {
+        color: "#55e66b",
+        pixels: [
+          "00111100",
+          "01111110",
+          "11111111",
+          "11011011",
+          "11111111",
+          "00111100",
+          "01100110",
+          "11000011"
+        ]
+      }
+    };
+    const invaderFormation = {
+      x: 0,
+      y: 60,
+      direction: 1,
+      speed: 80,
+      drop: 24,
+      columns: 11,
+      rows: ["squid", "crab", "crab", "octopus", "octopus"],
+      pixelSize: 3,
+      stepX: 48,
+      stepY: 42
+    };
+    const invaderSize = 8 * invaderFormation.pixelSize;
+    const formationWidth = (invaderFormation.columns - 1) * invaderFormation.stepX + invaderSize;
+    const initialFormationX = (canvas.width - formationWidth) / 2;
+    const initialFormationY = invaderFormation.y;
+    const initialFormationDirection = invaderFormation.direction;
+    invaderFormation.x = initialFormationX;
+    const invaders = [];
+    for (let row = 0; row < invaderFormation.rows.length; row += 1) {
+      for (let column = 0; column < invaderFormation.columns; column += 1) {
+        invaders.push({
+          row,
+          column,
+          type: invaderFormation.rows[row],
+          alive: true
+        });
+      }
+    }
+    const keys = new Set();
+    const playerBullets = [];
+    const invaderBullets = [];
+    let playerLives = 3;
+    let score = 0;
+    let playerFireTimer = 0;
+    let invaderFireTimer = 0.8;
+    let previousFrameTime = 0;
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        keys.add(event.key);
+      }
+      if (event.code === "Space" || event.key === " ") {
+        event.preventDefault();
+        keys.add("Space");
+      }
+    });
+
+    window.addEventListener("keyup", (event) => {
+      keys.delete(event.key);
+      if (event.code === "Space" || event.key === " ") {
+        keys.delete("Space");
+      }
+    });
+
+    window.addEventListener("blur", () => {
+      keys.clear();
+    });
+
+    function updateInvaders(elapsedSeconds) {
+      const livingInvaders = invaders.filter((invader) => invader.alive);
+      if (livingInvaders.length === 0) {
+        return;
+      }
+
+      let leftOffset = Infinity;
+      let rightOffset = -Infinity;
+      for (const invader of livingInvaders) {
+        const x = invader.column * invaderFormation.stepX;
+        leftOffset = Math.min(leftOffset, x);
+        rightOffset = Math.max(rightOffset, x + invaderSize);
+      }
+
+      const nextX = invaderFormation.x
+        + invaderFormation.direction * invaderFormation.speed * elapsedSeconds;
+
+      if (nextX + leftOffset < 0) {
+        invaderFormation.x = -leftOffset;
+        invaderFormation.direction = 1;
+        invaderFormation.y += invaderFormation.drop;
+      } else if (nextX + rightOffset > canvas.width) {
+        invaderFormation.x = canvas.width - rightOffset;
+        invaderFormation.direction = -1;
+        invaderFormation.y += invaderFormation.drop;
+      } else {
+        invaderFormation.x = nextX;
+      }
+    }
+
+    function drawInvaders() {
+      for (const invader of invaders) {
+        if (!invader.alive) {
+          continue;
+        }
+
+        const sprite = invaderSprites[invader.type];
+        const x = invaderFormation.x + invader.column * invaderFormation.stepX;
+        const y = invaderFormation.y + invader.row * invaderFormation.stepY;
+        context.fillStyle = sprite.color;
+
+        for (let pixelRow = 0; pixelRow < sprite.pixels.length; pixelRow += 1) {
+          for (let pixelColumn = 0; pixelColumn < sprite.pixels[pixelRow].length; pixelColumn += 1) {
+            if (sprite.pixels[pixelRow][pixelColumn] === "1") {
+              context.fillRect(
+                x + pixelColumn * invaderFormation.pixelSize,
+                y + pixelRow * invaderFormation.pixelSize,
+                invaderFormation.pixelSize,
+                invaderFormation.pixelSize
+              );
+            }
+          }
+        }
+      }
+    }
+
+    function overlaps(first, second) {
+      return first.x < second.x + second.width
+        && first.x + first.width > second.x
+        && first.y < second.y + second.height
+        && first.y + first.height > second.y;
+    }
+
+    function resetWave() {
+      for (const invader of invaders) {
+        invader.alive = true;
+      }
+
+      invaderFormation.x = initialFormationX;
+      invaderFormation.y = initialFormationY;
+      invaderFormation.direction = initialFormationDirection;
+      playerBullets.length = 0;
+      invaderBullets.length = 0;
+      playerFireTimer = 0;
+      invaderFireTimer = 0.8;
+    }
+
+    function updatePlayerBullets(elapsedSeconds) {
+      for (let bulletIndex = playerBullets.length - 1; bulletIndex >= 0; bulletIndex -= 1) {
+        const bullet = playerBullets[bulletIndex];
+        bullet.y -= bullet.speed * elapsedSeconds;
+
+        if (bullet.y + bullet.height < 0) {
+          playerBullets.splice(bulletIndex, 1);
+          continue;
+        }
+
+        for (const invader of invaders) {
+          if (!invader.alive) {
+            continue;
+          }
+
+          const target = {
+            x: invaderFormation.x + invader.column * invaderFormation.stepX,
+            y: invaderFormation.y + invader.row * invaderFormation.stepY,
+            width: invaderSize,
+            height: invaderSize
+          };
+          if (overlaps(bullet, target)) {
+            invader.alive = false;
+            score += 10;
+            playerBullets.splice(bulletIndex, 1);
+            break;
+          }
+        }
+      }
+
+      if (invaders.every((invader) => !invader.alive)) {
+        resetWave();
+      }
+    }
+
+    function updateInvaderBullets(elapsedSeconds) {
+      for (let bulletIndex = invaderBullets.length - 1; bulletIndex >= 0; bulletIndex -= 1) {
+        const bullet = invaderBullets[bulletIndex];
+        bullet.y += bullet.speed * elapsedSeconds;
+
+        if (bullet.y > canvas.height) {
+          invaderBullets.splice(bulletIndex, 1);
+          continue;
+        }
+
+        if (playerLives > 0 && overlaps(bullet, ship)) {
+          playerLives -= 1;
+          invaderBullets.splice(bulletIndex, 1);
+          break;
+        }
+      }
+    }
+
+    function fireInvaderBullet(elapsedSeconds) {
+      invaderFireTimer -= elapsedSeconds;
+      if (invaderFireTimer > 0 || playerLives === 0) {
+        return;
+      }
+
+      const livingInvaders = invaders.filter((invader) => invader.alive);
+      if (livingInvaders.length === 0) {
+        return;
+      }
+
+      const shooter = livingInvaders[Math.floor(Math.random() * livingInvaders.length)];
+      invaderBullets.push({
+        x: invaderFormation.x + shooter.column * invaderFormation.stepX + invaderSize / 2 - 2,
+        y: invaderFormation.y + shooter.row * invaderFormation.stepY + invaderSize,
+        width: 4,
+        height: 12,
+        speed: 240
+      });
+      invaderFireTimer = 1 + Math.random();
+    }
+
+    function drawBullets() {
+      context.fillStyle = "#fff";
+      for (const bullet of playerBullets) {
+        context.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+      }
+
+      context.fillStyle = "#ff5c5c";
+      for (const bullet of invaderBullets) {
+        context.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+      }
+    }
+
+    function drawLives() {
+      context.fillStyle = "#fff";
+      context.font = "18px monospace";
+      context.textAlign = "left";
+      context.fillText(`LIVES: ${playerLives}`, 16, 28);
+      context.textAlign = "center";
+      context.fillText(`SCORE: ${score}`, canvas.width / 2, 28);
+      context.textAlign = "right";
+      context.fillText("SPACE: FIRE", canvas.width - 16, 28);
+
+      if (playerLives === 0) {
+        context.font = "32px monospace";
+        context.textAlign = "center";
+        context.fillText("GAME OVER", canvas.width / 2, canvas.height / 2);
+      }
+    }
+
+    function updateGame(elapsedSeconds) {
+      if (playerLives === 0) {
+        return;
+      }
+
+      updateInvaders(elapsedSeconds);
+
+      if (keys.has("ArrowLeft")) {
+        ship.x -= ship.speed * elapsedSeconds;
+      }
+      if (keys.has("ArrowRight")) {
+        ship.x += ship.speed * elapsedSeconds;
+      }
+      ship.x = Math.max(0, Math.min(canvas.width - ship.width, ship.x));
+
+      if (keys.has("Space")) {
+        playerFireTimer -= elapsedSeconds;
+        if (playerFireTimer <= 0) {
+          playerBullets.push({
+            x: ship.x + ship.width / 2 - 2,
+            y: ship.y - 12,
+            width: 4,
+            height: 12,
+            speed: 420
+          });
+          playerFireTimer = 0.28;
+        }
+      } else {
+        playerFireTimer = 0;
+      }
+
+      fireInvaderBullet(elapsedSeconds);
+      updatePlayerBullets(elapsedSeconds);
+      updateInvaderBullets(elapsedSeconds);
+    }
+
+    function drawFrame(timestamp) {
+      const elapsedSeconds = previousFrameTime
+        ? Math.min((timestamp - previousFrameTime) / 1000, 0.05)
+        : 0;
+      previousFrameTime = timestamp;
+
+      updateGame(elapsedSeconds);
+
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      drawInvaders();
+      if (playerLives > 0) {
+        context.fillStyle = "#fff";
+        context.fillRect(ship.x, ship.y, ship.width, ship.height);
+      }
+      drawBullets();
+      drawLives();
+
+      requestAnimationFrame(drawFrame);
+    }
+
+    requestAnimationFrame(drawFrame);
+  </script>
+</body>
+</html>
